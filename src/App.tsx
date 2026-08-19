@@ -58,13 +58,20 @@ export default function App() {
       const savedImages = await loadImagesFromStorage();
       const initialMap: Record<number, string> = { ...savedImages };
 
-      // 2. Check if static files exist in /images/ or /public/images/
+      // 2. Check if static files exist in /images/
       for (const p of pages) {
         if (!initialMap[p.id]) {
           const candidates = [
             `/images/${p.fileName}`,
+            `/images/${encodeURIComponent(p.fileName)}`,
             `/images/${p.fileNumber}.png`,
-            `/images/${p.fileNumber}.jpg`
+            `/images/${p.fileNumber}.jpg`,
+            `/images/${p.fileNumber}.jpeg`,
+            `/images/${p.fileNumber}.PNG`,
+            `/images/${p.fileNumber}.JPG`,
+            `/images/${p.fileNumber}.webp`,
+            `/images/page_${p.fileNumber}.png`,
+            `/images/page_${p.fileNumber}.jpg`,
           ];
           for (const url of candidates) {
             try {
