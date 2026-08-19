@@ -4,7 +4,9 @@ import {
   Upload, 
   Trash2, 
   Check, 
-  FolderOpen
+  FolderOpen,
+  Globe,
+  Loader2
 } from 'lucide-react';
 
 interface ImageManagerModalProps {
@@ -24,14 +26,32 @@ export const ImageManagerModal: React.FC<ImageManagerModalProps> = ({
 }) => {
   const [dragOver, setDragOver] = useState(false);
   const [matchCount, setMatchCount] = useState<number | null>(null);
+  const [isSavingToServer, setIsSavingToServer] = useState(false);
+  const [serverSaveSuccess, setServerSaveSuccess] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleFiles = (files: FileList | File[]) => {
+  // Helper to read file as Base64 Data URL
+  const readFileAsDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFiles = async (files: FileList | File[]) => {
+    setIsSavingToServer(true);
+    setServerSaveSuccess(false);
+
     const newImages = { ...customImages };
+    const serverPayload: Record<string, string> = {};
     let matched = 0;
 
-    Array.from(files).forEach((file) => {
+    const fileArray = Array.from(files);
+
+    for (const file of fileArray) {
       const fileName = file.name;
       const targetPage = pages.find((p) => {
         const cleanUploaded = fileName.replace(/\s+/g, '').toLowerCase();
@@ -55,15 +75,42 @@ export const ImageManagerModal: React.FC<ImageManagerModalProps> = ({
       });
 
       if (targetPage) {
-        const objectUrl = URL.createObjectURL(file);
-        newImages[targetPage.id] = objectUrl;
-        matched++;
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          newImages[targetPage.id] = dataUrl;
+          // Save with official page fileName for server persistence
+          serverPayload[targetPage.fileName] = dataUrl;
+          serverPayload[`${targetPage.fileNumber}.png`] = dataUrl;
+          matched++;
+        } catch (err) {
+          console.error('Error reading file:', err);
+        }
       }
-    });
+    }
 
     onUpdateImages(newImages);
     setMatchCount(matched);
-    setTimeout(() => setMatchCount(null), 4000);
+
+    // Save to server backend so public URL users can see it permanently
+    try {
+      if (Object.keys(serverPayload).length > 0) {
+        const res = await fetch('/api/save-server-images', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ images: serverPayload })
+        });
+        if (res.ok) {
+          setServerSaveSuccess(true);
+        }
+      }
+    } catch (err) {
+      console.warn('Server save optional sync:', err);
+    } finally {
+      setIsSavingToServer(false);
+      setTimeout(() => {
+        setMatchCount(null);
+      }, 5000);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -80,16 +127,39 @@ export const ImageManagerModal: React.FC<ImageManagerModalProps> = ({
     }
   };
 
-  const handleIndividualUpload = (pageId: number, file: File) => {
-    const objectUrl = URL.createObjectURL(file);
-    onUpdateImages({
-      ...customImages,
-      [pageId]: objectUrl
-    });
+  const handleIndividualUpload = async (pageId: number, file: File) => {
+    setIsSavingToServer(true);
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const targetPage = pages.find(p => p.id === pageId);
+      
+      onUpdateImages({
+        ...customImages,
+        [pageId]: dataUrl
+      });
+
+      if (targetPage) {
+        await fetch('/api/save-server-images', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            images: {
+              [targetPage.fileName]: dataUrl,
+              [`${targetPage.fileNumber}.png`]: dataUrl
+            } 
+          })
+        });
+        setServerSaveSuccess(true);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSavingToServer(false);
+    }
   };
 
   const handleClearAll = () => {
-    if (window.confirm('設定した画像プレビューをすべて初期化（デザインスライド表示に戻す）しますか？')) {
+    if (window.confirm('設定した画像プレビューを初期化（公式デザインスライド表示）に戻しますか？')) {
       onUpdateImages({});
     }
   };
@@ -108,15 +178,15 @@ export const ImageManagerModal: React.FC<ImageManagerModalProps> = ({
         {/* Modal Header */}
         <div className="px-6 py-4 border-b border-[#E5E2DA] flex items-center justify-between bg-[#FAF8F3]">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-[#5A5A40] text-white rounded-full flex items-center justify-center shadow-xs">
+            <div className="w-10 h-10 bg-[#5A5A40] text-[#FDFBF7] rounded-full flex items-center justify-center shadow-xs">
               <Upload className="w-5 h-5" />
             </div>
             <div>
               <h2 className="font-serif italic font-bold text-base md:text-lg text-[#2C2C28]">
-                画像ファイル設定・一括適用マネージャー
+                画像ファイル一括登録・公開マネージャー
               </h2>
               <p className="text-xs text-[#8C8A7D]">
-                お持ちの画像ファイル（PNG）をドラッグ＆ドロップすると、ファイル名から自動判別して全ページに適用します。
+                PCの画像ファイルをドロップすると、アプリ全体に永久保存され、共有URLを開いた全員に表示されます。
               </p>
             </div>
           </div>
@@ -130,13 +200,13 @@ export const ImageManagerModal: React.FC<ImageManagerModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1 custom-scrollbar">
+        <div className="p-6 overflow-y-auto space-y-5 flex-1 custom-scrollbar">
           {/* Dropzone Area */}
           <div
             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
-            className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all flex flex-col items-center justify-center gap-3 cursor-pointer ${
+            className={`border-2 border-dashed rounded-2xl p-7 text-center transition-all flex flex-col items-center justify-center gap-3 cursor-pointer ${
               dragOver
                 ? 'border-[#5A5A40] bg-[#5A5A40]/10'
                 : 'border-[#D6D2C9] hover:border-[#5A5A40] bg-[#FDFBF7]'
@@ -156,25 +226,40 @@ export const ImageManagerModal: React.FC<ImageManagerModalProps> = ({
             </div>
             <div>
               <p className="text-sm font-serif font-bold text-[#2C2C28]">
-                画像をここにドラッグ＆ドロップ（複数ファイル・一括選択対応）
+                画像をここにドラッグ＆ドロップ（またはクリックして選択）
               </p>
               <p className="text-xs text-[#8C8A7D] mt-1 font-serif italic">
-                「001_地域の産業人材育成ロードマップ.png」などのファイル名から自動で各ページを紐付けます
+                20枚まとめて一括選択できます。ファイル名（001, 401...）から全自動で各ページに配分されます。
               </p>
             </div>
             <button
               type="button"
-              className="px-5 py-2 bg-[#FAF8F3] hover:bg-[#EEECE4] text-[#43423E] text-xs font-semibold rounded-full border border-[#E5E2DA] shadow-xs"
+              className="px-5 py-2 bg-[#5A5A40] hover:bg-[#484833] text-[#FDFBF7] text-xs font-semibold rounded-full shadow-xs transition-colors"
             >
-              ファイルを選択する
+              PCから画像ファイルを選択（複数可）
             </button>
           </div>
 
-          {/* Feedback notification */}
+          {/* Saving / Success notification */}
+          {isSavingToServer && (
+            <div className="p-3.5 bg-[#BC6C25]/10 border border-[#BC6C25]/30 text-[#BC6C25] rounded-xl text-xs flex items-center gap-2 font-medium">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>サーバーへ画像を保存中...</span>
+            </div>
+          )}
+
           {matchCount !== null && (
-            <div className="p-3.5 bg-[#5A5A40]/15 border border-[#5A5A40]/30 text-[#5A5A40] rounded-xl text-xs flex items-center gap-2 font-medium">
-              <Check className="w-4 h-4 text-[#5A5A40]" />
-              <span>{matchCount} 件の画像ファイルをページに適用しました！</span>
+            <div className="p-3.5 bg-[#5A5A40]/15 border border-[#5A5A40]/30 text-[#5A5A40] rounded-xl text-xs flex items-center justify-between font-medium">
+              <div className="flex items-center gap-2">
+                <Check className="w-4 h-4 text-[#5A5A40]" />
+                <span>{matchCount} 件の画像を適用しました！</span>
+              </div>
+              {serverSaveSuccess && (
+                <div className="flex items-center gap-1 text-[11px] text-[#5A5A40] font-semibold">
+                  <Globe className="w-3.5 h-3.5" />
+                  <span>サーバーに永久保存完了（公開URLにも反映）</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -187,7 +272,7 @@ export const ImageManagerModal: React.FC<ImageManagerModalProps> = ({
               </span>
               {loadedCount === 0 && (
                 <span className="text-[#8C8A7D] text-[11px] font-serif italic">
-                  （未設定時は専用デザインスライドで美しく表示されます）
+                  （未設定時は公式デザインスライドで表示されます）
                 </span>
               )}
             </div>
@@ -233,7 +318,7 @@ export const ImageManagerModal: React.FC<ImageManagerModalProps> = ({
                       {hasImg ? (
                         <>
                           <span className="text-[#5A5A40] text-[11px] font-medium flex items-center gap-0.5">
-                            <Check className="w-3.5 h-3.5" /> 適用中
+                            <Check className="w-3.5 h-3.5" /> 登録済
                           </span>
                           <button
                             onClick={() => handleRemoveSingle(p.id)}
@@ -267,7 +352,11 @@ export const ImageManagerModal: React.FC<ImageManagerModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-6 py-4 bg-[#FAF8F3] border-t border-[#E5E2DA] flex items-center justify-end">
+        <div className="px-6 py-4 bg-[#FAF8F3] border-t border-[#E5E2DA] flex items-center justify-between">
+          <div className="text-xs text-[#706E64] flex items-center gap-1.5">
+            <Globe className="w-3.5 h-3.5 text-[#5A5A40]" />
+            <span>登録された画像は共有リンク（URL）の閲覧者全員に公開されます</span>
+          </div>
           <button
             onClick={onClose}
             className="px-6 py-2 bg-[#5A5A40] hover:bg-[#484833] text-[#FDFBF7] font-semibold text-xs rounded-full shadow-xs transition-colors"
