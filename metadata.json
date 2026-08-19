@@ -1,0 +1,6 @@
+{
+  "name": "高山市 産業人材育成・企業支援 スライドブック",
+  "description": "高山市の産業人材育成、UIJターン、企業立地、採用支援、DX推進などの制度画像をファイル番号昇順でそのまま閲覧できるデジタルスライドブック",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
